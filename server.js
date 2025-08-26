@@ -2,86 +2,102 @@ import express from "express";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
+import cors from "cors";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Enable CORS for frontend
+app.use(cors());
+app.use(express.json());
 
 // Serve static files
 app.use(express.static("public"));
 app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 
-// Directories
+// --- Directories ---
 const projectDir = path.join(process.cwd(), "uploads/projects");
 const resumeDir = path.join(process.cwd(), "uploads/resume");
-const clientProjectDir = path.join(process.cwd(), "../client/uploads/projects");
-const clientResumeDir = path.join(process.cwd(), "../client/uploads/resume");
 
-// Create folders if they don't exist
-[projectDir, resumeDir, clientProjectDir, clientResumeDir].forEach(dir => {
+// Ensure directories exist
+[projectDir, resumeDir].forEach(dir => {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 });
 
-// Multer storage
-const projectUpload = multer({
-  storage: multer.diskStorage({
-    destination: projectDir,
-    filename: (req, file, cb) => cb(null, file.originalname),
-  }),
+// --- Multer storage ---
+// Project images
+const projectStorage = multer.diskStorage({
+  destination: projectDir,
+  filename: (req, file, cb) => {
+    const projectId = req.body.projectId;
+    if (!projectId) return cb(new Error("projectId is required"));
+    const ext = path.extname(file.originalname);
+    cb(null, `image_${projectId}${ext}`);
+  }
 });
+const projectUpload = multer({ storage: projectStorage });
 
-const resumeUpload = multer({
-  storage: multer.diskStorage({
-    destination: resumeDir,
-    filename: (req, file, cb) => cb(null, file.originalname),
-  }),
+// Resume
+const resumeStorage = multer.diskStorage({
+  destination: resumeDir,
+  filename: (req, file, cb) => cb(null, "resume.pdf") // overwrite always
 });
+const resumeUpload = multer({ storage: resumeStorage });
 
-// Helper: copy file to client folder
-function copyToClient(filePath, clientDir, fileName) {
-  fs.copyFileSync(filePath, path.join(clientDir, fileName));
-}
-
-// ---------------- Routes ----------------
-
-// Upload project image (keeps previous images, no deletion)
+// --- Routes ---
+// Upload project image
 app.post("/upload-project-image", projectUpload.single("projectImage"), (req, res) => {
   if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
-  const newPath = `/uploads/projects/${req.file.filename}`;
+  const filename = req.file.filename;
+  const filePath = path.join(projectDir, filename);
 
-  // Copy to client folder
-  copyToClient(path.join(projectDir, req.file.filename), clientProjectDir, req.file.filename);
+  // Overwrite if exists (multer already saves as temp, so just ensure)
+  if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+  fs.renameSync(req.file.path, filePath);
 
-  res.json({ path: newPath });
+  const localUrl = `/uploads/projects/${filename}`;
+  const gitUrl = `https://raw.githubusercontent.com/w636199-alt/portfolio/main/uploads/projects/${filename}`;
+  res.json({ localUrl, gitUrl, filename });
 });
 
 // Upload resume
 app.post("/upload-resume", resumeUpload.single("resumeFile"), (req, res) => {
   if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
-  const newPath = `/uploads/resume/${req.file.filename}`;
+  const filename = req.file.filename;
+  const filePath = path.join(resumeDir, filename);
 
-  // Copy to client folder
-  copyToClient(path.join(resumeDir, req.file.filename), clientResumeDir, req.file.filename);
+  if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+  fs.renameSync(req.file.path, filePath);
 
-  res.json({ path: newPath });
+  const localUrl = `/uploads/resume/${filename}`;
+  const gitUrl = `https://raw.githubusercontent.com/w636199-alt/portfolio/main/uploads/resume/${filename}`;
+  res.json({ localUrl, gitUrl, filename });
 });
 
-// Delete resume explicitly
-app.post("/delete-resume", express.json(), (req, res) => {
+// Delete project image
+app.post("/delete-project-image", (req, res) => {
+  const { filename } = req.body;
+  if (!filename) return res.status(400).json({ error: "No filename provided" });
+
+  const filePath = path.join(projectDir, filename);
+  if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+
+  res.json({ success: true });
+});
+
+// Delete resume
+app.post("/delete-resume", (req, res) => {
   const { filePath } = req.body;
   if (!filePath) return res.status(400).json({ error: "No file path provided" });
 
-  const serverPath = path.join(process.cwd(), filePath);
-  if (fs.existsSync(serverPath)) fs.unlinkSync(serverPath);  // delete from admin/server
-
-  const clientPath = path.join(clientResumeDir, path.basename(filePath));
-  if (fs.existsSync(clientPath)) fs.unlinkSync(clientPath);  // delete from client
+  const filename = path.basename(filePath);
+  const resumePath = path.join(resumeDir, filename);
+  if (fs.existsSync(resumePath)) fs.unlinkSync(resumePath);
 
   res.json({ success: true });
 });
 
 // Start server
-app.listen(PORT, () => {
-  console.log(`Server running at http://localhost:${PORT}`);
-});
+app.listen(PORT, () => console.log(`Server running at http://localhost:${PORT}`));
